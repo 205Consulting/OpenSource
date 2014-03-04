@@ -17,11 +17,65 @@ class pd_lda(object):
 			returns: instantiated pd_lda class
 		'''
 		self.df = df
+		self.fields_to_lda_models = {}
 		
 		
+### USER USES THIS FUNCTION ###
+
+	def find_per_topic_word_distributions(self, lda_model):
+		'''
+			function: find_per_topic_word_distributions
+
+			params: lda_model - lda model to find distributions for
+
+			returns: a list of dicts, the i'th dict mapping words -> probabilities for the i'th topic
+		'''
+		dist = []
+		# 1: iterate through topics
+		for topic in range(lda_model.num_topics): 
+			topic_dist_dict = {}
+			# 2: get probability distribution
+			topic_dist = lda_model.state.get_lambda()[cluster] 
+			# 3: normalize to real probability distribution
+			topic_dist = topic_dist / topic_dist.sum()
+			for i in range(len(topic_dist)):
+				# 4: map the string id of the node to the probability (self.dict goes from gensim's id -> my string id)
+				topic_dist_dict[lda_model.id2word[i]] = topic_dist[i] 
+			# 5: append to array of dicts
+			dist.append(topic_dist_dict) 
+		return dist
 
 
-	def add_lda_column(self, fields):
+
+
+	def get_lda_model(self, fields, distributions=True):
+		'''
+			function: get_lda_model
+
+			params: fields - list of fields that represent the LDA model you want
+
+			returns: the trained LDA model, as well as the per topics word distributions if requested
+		'''
+		# 1: make fields string
+		fields_string = "".join(fields)
+
+		# 2: find lda model
+		if fields_string in self.fields_to_lda_models:
+			lda_model = self.fields_to_lda_models[fields_string]
+		else:
+			lda_model = self.build_lda_model(fields)
+
+		# 3: find distributions
+		if distributions:
+			distributions = self.find_per_topic_word_distributions(lda_model)
+		else:
+			distributions = None
+
+		# 4: return
+
+
+
+	def add_lda_column(self, fields, update_df=True):
 		'''
 			function: add_lda_column
 
@@ -30,8 +84,9 @@ class pd_lda(object):
 			returns: the original dataframe with a new column corresponding the the lda inference vector given by the lda model trained on
 			the fields passed in. Note that self.df will be updated as well.
 		'''
-		# 1: make LDA model
+		# 1: make LDA model, store it in the class dict
 		LDA_model = self.build_lda_model(fields)
+		self.fields_to_lda_models["".join(fields)] = LDA_model
 
 		# 2: update dataframe
 		self.df['LDA_%s' % "".join(fields)] = self.df["".join(fields)].map(lambda x: LDA_model.inference(LDA_model.inference([LDA_model.id2word.doc2bow(x)])[0][0]))
