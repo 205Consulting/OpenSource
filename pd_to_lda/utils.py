@@ -11,6 +11,7 @@ print model.show_topic(1)
 # mymodel = model.copy()
 new_model = pdlda.update_lda(df_two, ['words'])
 print new_model.show_topic(1)
+new_df = pdlda.add_lda_column(df, ['words'], new_model)
 
 
 

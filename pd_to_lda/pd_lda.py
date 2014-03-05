@@ -132,7 +132,8 @@ class pd_lda(object):
 		#1 : make bag representation (the value of each field is assumed to already be a list of words)
 		bag_rep = []
 		for field in fields:
-			bag_rep += row[field]
+			if type(row[field]) == list:
+				bag_rep += row[field]	
 
 		#2 : turn to gensim format
 		gensim_bag = lda_model.id2word.doc2bow(bag_rep)
