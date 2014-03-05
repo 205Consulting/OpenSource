@@ -2,9 +2,25 @@ import networkx as nx
 from networkx.algorithms import bipartite
 import gensim
 import numpy as np
+import time
+import json
 
 # todo:
 # add hyperparameters i.e num_topics, iterations, w/e
+'''
+	class: bpg_recommender
+
+	usage: write a new class (i.e, "soundcloud_recommender") that inherits bpg_recommender. overrwrite additional_feature_factory
+	with whatever extra features you want to specific to your data. call in the init of that new class "initialize"
+	given the user you want to recommend for (this returns a partition index that the user is in). Use the gather_data method
+	to gather data. 
+
+ ------ old:
+	Write a run method for your new class that 
+	loops through self.nodes[partition_index^1], i.e the other partition index, and use the gather data module to gather data. Later,
+	in your new class, you can make a classifier that uses this data to predict.
+
+'''
 
 
 ### README:
@@ -15,9 +31,10 @@ class bpg_recommender(object):
 	def __init__(self, b, num_clusters = 6):
 		self.b = b
 		self.num_clusters = num_clusters
+		self.nodes_sorted = None
 		# split the graph into it's two partitions
 		self.nodes = list(bipartite.sets(b))
-		self.mappings = {}
+		self.mappings = []
 
 		# NOTE: self.copora[0] consideres each node in self.nodes[0] and makes a bag of songs representation for it's neighbors.
 		# i.e self.corpora[0] is what we pass into lda when we want to model the nodes in self.nodes[0] as documents and the nodes in self.nodes[1] as "words"
@@ -30,6 +47,16 @@ class bpg_recommender(object):
 
 		self.per_dnode_cluster_distributions = self._find_per_dnode_cluster_distributions()
 
+
+	def print_node(node):
+		'''
+			function: print_node
+
+			params: node - node to print
+
+			notes: users should overwrite this function.
+		'''
+		print node
 
 	def additional_feature_factory(self, node):
 		'''
@@ -59,10 +86,11 @@ class bpg_recommender(object):
 		'''
 		features = []
 		# append all the base features that we have
-		for mapping in mappings:
-			features.append(mapping[str(node)])
+		for mapping in self.mappings:
+			features.append(mapping[node])
 		# append additional, non-agnostic features
 		features += self.additional_feature_factory(node)
+		return features
 
 
 
@@ -198,6 +226,7 @@ class bpg_recommender(object):
 
 
 		scores = {}
+		to_sort = []
 		for node_to_check in self.nodes[partition_index]:
 			# find P(t|s) as 'gamma'
 			bag_rep = self._node_to_bagofneighbors(node_to_check)
@@ -206,15 +235,17 @@ class bpg_recommender(object):
 			normalized_gamma = gamma[0]/sum(gamma[0])
 
 			# score is sum over t (P(t|s)P(u|t)) = P(u|s) by independence assumptions of LDA. P(t|s) = normalized_gamma[dist_index], P(u|t) = per_cluster_node_dist[part_index][dist_index][str(node)]. 
-			# sum over t:
-			score = 0
-			for cluster_index in range(len(self.per_cluster_node_distributions[partition_index])):
-				#P(t|s):
-				p_t_given_s = normalized_gamma[cluster_index]
-				# P(u|t):
-				p_u_given_t = self.per_cluster_node_distributions[partition_index][dist_index][str(node)]
-				# add to score
-				score += p_t_given_s * p_u_given_t
+
+
+			# # sum over t:
+			# score = 0
+			# for cluster_index in range(len(self.per_cluster_node_distributions[partition_index])):
+			# 	#P(t|s):
+			# 	p_t_given_s = normalized_gamma[cluster_index]
+			# 	# P(u|t):
+			# 	p_u_given_t = self.per_cluster_node_distributions[partition_index][cluster_index][str(node)]
+			# 	# add to score
+			# 	score += p_t_given_s * p_u_given_t
 				# ____ NOTE: BECAUSE OF 1-NEIGHBOR NODES IN THE GRAPH, NEED TO INCLUDE P(S) PROBABLY ____ ##
 
 
@@ -223,11 +254,13 @@ class bpg_recommender(object):
 
 			score = sum([self.per_cluster_node_distributions[partition_index][dist_index][str(node)]*normalized_gamma[dist_index] for dist_index in range(len(self.per_cluster_node_distributions[partition_index]))]) #
 			scores[node_to_check] = score
+			to_sort.append((node_to_check, score))
 		# sort on highest scores
 		
 		
-		
-		return scores
+		to_sort.sort(key=lambda x: x[1], reverse=True)
+		nodes_sorted = [x[0] for x in to_sort]
+		return scores, nodes_sorted
 
 
 
@@ -397,18 +430,62 @@ class bpg_recommender(object):
 
 
 	def initialize_feature_mappings(self, node):
+		partition_index = self._find_partition_index(node)
 		
-		backwards_psu = self.backwards_LDA_psu(node)
+		backwards_psu, nodes_sorted = self.backwards_LDA_psu(node)
 		
 		forwards_psu, forwards_cosine_sim = self.forwards_LDA_psu(node)
 		
 		backwards_sim, forwards_sim = self.find_most_similar_user(node)
+		self.mappings += [backwards_psu, forwards_psu, forwards_cosine_sim]
+		self.nodes_sorted = nodes_sorted
 
-		self.mappings['backwards_psu'] = backwards_psu
-		self.mappings['fowards_psu'] = forwards_psu
-		self.mappings['forwards_cosine_sim'] = forwards_cosine_sim
+		# self.mappings['backwards_psu'] = backwards_psu
+		# self.mappings['fowards_psu'] = forwards_psu
+		# self.mappings['forwards_cosine_sim'] = forwards_cosine_sim
 
-		return backwards_psu, forwards_psu, backwards_sim, forwards_sim, forwards_cosine_sim
+		return partition_index
+
+
+	def gather_data(self, dump_file_path, partition_index):
+		'''
+			function: gather_data 
+
+			params:	dump_file_path - path to dump the outputted json file into
+					partition_index - partition to loop through
+
+			returns: the data that is json'd at the end
+
+			notes: usage is to loop through all the nodes and ask the user for a rating of it. on ending the loop,
+			the data is json'd into dump_file_path
+		'''
+		ratings = []
+		try:
+			# loop through nodes
+			for node in self.nodes_sorted:
+			# for node in self.nodes[partition_index]:
+				print "Here's the next data element:"
+				self.print_node(node)
+				print "\n\n"
+				features = self.feature_factory(node)
+				# get rating
+				rating = raw_input("Rating? (must be an int) ---> ")
+				sure = raw_input("Are you sure? (y/n) ---> ")
+				while (sure != "y"):
+					rating = raw_input("Rating? ---> ")
+					sure = raw_input("Are you sure? (y/n) ---> ")
+
+				ratings.append(features + [int(rating)])
+		except KeyboardInterrupt:
+			print "Shutting down. Do not press anything."
+			# dump json
+			json.dump(ratings, open(dump_file_path + str(time.time() + '.json'), 'w'))
+			return ratings
+		return ratings
+
+
+
+
 
 
 
