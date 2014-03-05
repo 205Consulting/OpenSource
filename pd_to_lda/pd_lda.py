@@ -1,26 +1,188 @@
 import pandas as pd
 import genism
 import operator
+from functools import partial
 import sys,os,io
 
 
 
 class pd_lda(object):
 
-	def __init__(self, df, fields):
+	def __init__(self, existing_lda_model = None):
 		'''
-			function: init (df, fields)
+			function: init
 
-			params: df - dataframe with entries to run lda on
-					
+			params: existing_lda_model - a tuple (lda_model, fields) where lda_model is a trained LDA model and fields 
+					is a list of fields that was used to train that lda model
 
 			returns: instantiated pd_lda class
 		'''
-		self.df = df
 		self.fields_to_lda_models = {}
+		if existing_lda_model != None:
+			lda_model = existing_lda_model[0]
+			fields = existing_lda_model[1]
+			self.fields_to_lda_models[self.fields_to_string(fields)] = lda_model
+
 		
 		
-### USER USES THIS FUNCTION ###
+# ============================[ FUNCTIONS INTENDED TO BE CALLED BY OTHER MODULES ] ======== #
+
+def get_lda_model(self, fields, distributions=False):
+		'''
+			function: get_lda_model
+
+			params: fields - list of fields that represent the LDA model you want
+					distributions - whether or not you want the distributions of the lda model
+
+			returns: the trained LDA model, as well as the per topics word distributions if requested
+		'''
+		# 1: make fields string
+		fields_string = "".join(fields)
+
+		# 2: find lda model
+		if fields_string in self.fields_to_lda_models:
+			lda_model = self.fields_to_lda_models[fields_string]
+		else:
+			raise ValueError('There is no LDA model trained using those fields. If you want to train one, use update_lda')
+
+		# 3: find distributions
+		if distributions:
+			distributions = self.find_per_topic_word_distributions(lda_model)
+		
+
+		# 4: return
+		if distributions:
+			return (lda_model, distributions)
+		else:
+			return lda_model
+
+
+
+def update_lda(self, df, fields, lda_model=None):
+	'''
+		function: update_lda
+
+		params: df - input df to update the lda model with
+				fields - the fields to update the lda model with. Note that the lda model that will be updated
+				is specifically the one trained on the fields given unless otherwise given
+				lda_model - a trained LDA model 
+
+		returns: updated lda model
+
+		notes: if there is no current lda model trained, this builds one using the passed in dataframe
+	'''
+	if lda_model != None:
+		return self.update_trained_lda_model(lda_model, df, fields)
+
+
+
+	if (self.lda_is_trained(fields)):
+		return self.update_trained_lda_model(self.get_lda_model(fields), df, fields)
+	else:
+		return self.build_lda_model(df, fields)
+
+def add_lda_column(self, df, fields, lda_model=None):
+	'''
+		function: add_lda_column
+
+		params: df - dataframe to add lda column to
+				fields - fields to run lda on
+				lda_model - a trained lda model if the user wishes to pass one in
+
+		returns: a new dataframe with a new column corresponding to the lda inference vectors
+	'''
+	#1 : use right lda model
+	if lda_model == None:
+		if self.lda_is_trained(fields):
+			lda_model = self.get_lda_model(fields)
+		else:
+			lda_model = self.build_lda_model(df, fields)
+
+	#2 : add column to df
+	df[self.fields_to_string + '_lda'] = df.apply(partial(self.lda_inference, lda_model, fields), axis=1)
+
+	#3 : return df
+	return df
+
+
+
+
+
+
+
+
+
+
+# ============================================[ PRIVATE FUNCTIONS ] ============================================ #
+
+
+	def lda_inference(self, lda_model, fields, row):
+		'''
+			function: lda_inference
+
+			params: lda_model - lda to run inference with
+					fields - fields to run inference on
+					row - row in a dataframe with fields to run inference on
+
+			returns: normalized lda vector
+
+			notes: used using a df's .apply method to generate a new column
+		'''
+		#1 : make bag representation (the value of each field is assumed to already be a list of words)
+		bag_rep = []
+		for field in fields:
+			bag_rep += row[field]
+
+		#2 : turn to gensim format
+		gensim_bag = lda_model.id2word.doc2bow(bag_rep)
+
+		#3 : get inference vector
+		gamma, sstats = lda_model.inference([gensim_bag])
+		normalized_gamma = gamma[0] / sum(gamma[0])
+
+		#4 : return
+		return normalized_gamma
+
+
+
+	def update_trained_lda_model(self, lda_model, df, fields):
+		'''
+			function: update_trained_lda_model
+
+			params: lda_model - model to update
+					df - dataframe with documents to update the lda model with
+					fields - fields to use to generate those documents
+
+			returns: updated lda model
+
+			notes: really not clear to me what happens if there is a word in the new corpus that wasn't in the originally
+			trained lda corpus... I think that passing in existing dictionary like I did works because in generate_corpus
+			i allow it to update. But if there is some wierd behavior we see this might be somewhere to look.
+		'''
+		#1 : generate corpus
+		corpus = self.generate_corpus(df, fields, existing_dictionary=lda_model.id2word)
+
+		#2 : update lda model
+		lda_model.update(corpus)
+
+		#3 : return
+		return lda_model
+
+
+	def lda_is_trained(self, fields):
+		'''
+			function: lda_is_trained
+
+			params: fields - the fields to check if an lda model has been trained on
+
+			returns: true or false
+		'''
+		return self.fields_to_string(fields) in self.fields_to_lda_models
+
+
+
+	def fields_to_string(self, fields):
+		return "".join(fields)
 
 	def find_per_topic_word_distributions(self, lda_model):
 		'''
@@ -48,11 +210,12 @@ class pd_lda(object):
 
 
 
-	def get_lda_model(self, fields, distributions=True):
+	def get_lda_model(self, fields, distributions=False):
 		'''
 			function: get_lda_model
 
 			params: fields - list of fields that represent the LDA model you want
+					distributions - whether or not you want the distributions of the lda model
 
 			returns: the trained LDA model, as well as the per topics word distributions if requested
 		'''
@@ -63,86 +226,87 @@ class pd_lda(object):
 		if fields_string in self.fields_to_lda_models:
 			lda_model = self.fields_to_lda_models[fields_string]
 		else:
-			lda_model = self.build_lda_model(fields)
+			raise ValueError('There is no LDA model trained using those fields. If you want to train one, use update_lda')
 
 		# 3: find distributions
 		if distributions:
 			distributions = self.find_per_topic_word_distributions(lda_model)
-		else:
-			distributions = None
+		
 
 		# 4: return
-
-
-
-	def add_lda_column(self, fields, update_df=True):
-		'''
-			function: add_lda_column
-
-			params: fields - list of fields to concatenate and run lda on
-
-			returns: the original dataframe with a new column corresponding the the lda inference vector given by the lda model trained on
-			the fields passed in. Note that self.df will be updated as well.
-		'''
-		# 1: make LDA model, store it in the class dict
-		LDA_model = self.build_lda_model(fields)
-		self.fields_to_lda_models["".join(fields)] = LDA_model
-
-		# 2: update dataframe
-		self.df['LDA_%s' % "".join(fields)] = self.df["".join(fields)].map(lambda x: LDA_model.inference(LDA_model.inference([LDA_model.id2word.doc2bow(x)])[0][0]))
-
-		# 3: return dataframe
-		return self.df
+		if distributions:
+			return (lda_model, distributions)
+		else:
+			return lda_model
 
 
 
 
 
-	def generate_corpus(self, fields):
+
+
+
+	def generate_corpus(self, df, fields, existing_dictionary=None):
 		'''
 			function: generate_corpus
 
-			params: fields - list of fields to concatenate
+			params: df - dataframe to generate corpus from
+					fields - list of fields to concatenate
+					existing_dictionary - existing dictionary for an lda model if one exists
 
-			returns: gensim style corpus given by self.df and the fields given
+			returns: gensim style corpus given by df and the fields given
 		'''
 
 
-		# 1: make a list of lists, to be filled by each row in self.df
-		texts = [[] for i in range(len(self.df))]
+		# 1: make a list of lists, to be filled by each row in df
+		texts = [[] for i in range(len(df))]
 
 		# 2: for each field, concatenate each text with the fields contents
 		for field in fields:
-			field_values = list(self.df[field])
+			field_values = list(df[field])
 			texts = map(operator.add, texts, field_values)
 
 
-		# 3: add the resulting texts as a new field ino self.df
-		field_string = "".join(fields)
-		self.df[field_string] = pd.Series(texts)
+		# 3: add the resulting texts as a new field in df (deprecated, left in case we need it later)
+		# field_string = "".join(fields)
+		# df[field_string] = pd.Series(texts)
 
 		# 4: convert to gensim style objects and return
-		dictionary = gensim.corpora.Dictionary(all_texts)
-		corpus = [dictionary.doc2bow(text) for text in all_texts]
+		if existing_dictionary == None:
+			dictionary = gensim.corpora.Dictionary(all_texts)
+			update=False
+		else:
+			dictionary = existing_dictionary
+			update=True
+
+		corpus = [dictionary.doc2bow(text, allow_update=update) for text in all_texts]
 		return corpus, dictionary
 
 
 
 
 
-	def build_lda_model(self, fields):
+	def build_lda_model(self, df, fields):
 		'''
 			function: build_lda_model(df, fields)
 
-			params: fields - list of fields corresponding to columns in the df to run lda on
+			params: df - dataframe to train lda model on
+					fields - list of fields corresponding to columns in the df to run lda on
 
 			returns: gensim LDAModel class trained on the data given
 		'''
 		# 1: make corpus and dictionary
-		corpus,dictionary = self.generate_corpus(fields)
+		corpus,dictionary = self.generate_corpus(df, fields)
 
 		# 2: run lda and return
 		lda = gensim.models.LdaModel(corpus, id2word=dictionary, num_topics=num_topics)
 		return lda, dictionary
+
+
+
+
+
+
+
 
 
