@@ -2,16 +2,16 @@ from functools import partial
 from pd_lda import pd_lda
 import pandas as pd
 
-df = pd.read_pickle('activities.df')
+df = pd.read_pickle('calendar_events_old.df')
 df_one = df[:len(df)-20]
 df_two = df[len(df)-20:len(df)]
 pdlda = pd_lda()
-model = pdlda.update_lda(df_one, ['words'])
+model = pdlda.update_lda(df_one, ['name'])
 print model.show_topic(1)
 # mymodel = model.copy()
-new_model = pdlda.update_lda(df_two, ['words'])
+new_model = pdlda.update_lda(df_two, ['name'])
 print new_model.show_topic(1)
-new_df = pdlda.add_lda_column(df, ['words'], new_model)
+new_df = pdlda.add_lda_column(df, ['name'], new_model)
 
 
 

@@ -100,11 +100,33 @@ class pd_lda(object):
 				lda_model = self.build_lda_model(df, fields)
 
 		#2 : add column to df
-		df[self.fields_to_string + '_lda'] = df.apply(partial(self.lda_inference, lda_model, fields), axis=1)
+		def lda_inference(row):
+			#1 : make bag representation (the value of each field is assumed to already be a list of words)
+			bag_rep = []
+			for field in fields:
+				if type(row[field]) == list:
+					bag_rep += row[field]	
+
+			#2 : turn to gensim format
+			gensim_bag = lda_model.id2word.doc2bow(bag_rep)
+
+			#3 : get inference vector
+			gamma, sstats = lda_model.inference([gensim_bag])
+			normalized_gamma = gamma[0] / sum(gamma[0])
+
+			#4 : return
+			# print list(normalized_gamma)
+			return [normalized_gamma]
+
+		inferences = df.apply(lda_inference, axis=1)
+		to_add = inferences[fields[0]]
+
+		print to_add
+		print len(to_add)
+		df[self.fields_to_string(fields) + '_lda'] = to_add#df.apply(lda_inference, axis=1)
 
 		#3 : return df
 		return df
-
 
 
 
