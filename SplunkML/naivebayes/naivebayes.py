@@ -160,7 +160,7 @@ class SplunkNaiveBayes(object):
 
 	def counts_to_logprobs(self):
 		#1: sufficient stat log probabilities
-		probas = self.sufficient_statistics / self.sufficient_statistics.sum(axis=1)[:,np.newaxis]
+		probabs = self.sufficient_statistics / self.sufficient_statistics.sum(axis=1)[:,np.newaxis]
 		self.log_prob_suff_stats = np.log(probabs)
 
 		#2: priors
@@ -171,6 +171,7 @@ class SplunkNaiveBayes(object):
 		priors = self.sufficient_statistics.sum(axis=1)
 		priors = priors / priors.sum()
 		self.log_prob_priors = np.log(priors)
+		
 
 
 	def train(self, data_file, feature_fields, class_field):
@@ -198,23 +199,35 @@ class SplunkNaiveBayes(object):
 
 	def to_numpy_rep(self, event_to_predict, feature_fields):
 		#1: initialize
-		np_rep = np.zeros((1,self.num_features))
+		np_rep = np.zeros((self.num_features,1))
 
 		#2: add features that the event has; if we've never seen one before, ignore it
 		for field in feature_fields:
 			val = event_to_predict[field]
 			if '%s_%s' % (field, val) in self.mapping:
-				np_rep[mapping['%s_%s' % (field,val)]] = 1
+				np_rep[self.mapping['%s_%s' % (field,val)]] = 1
 
 		#3: return
 		return np_rep
 
 
 
-	def predict(self, feature_fields, event_to_predict):
-		numpy_rep = self.to_numpy_rep(event_to_predict)
-		class_log_prob = np.dot(self.log_prob_suff_stats, numpy_rep.T)
+	def predict(self, feature_fields, event_to_predict=None):
+		if event_to_predict==None:
+			event_to_predict = {}
+			for feature in feature_fields:
+				if np.random.random() > .5:
+					event_to_predict[feature] = 'n'
+				else:
+					event_to_predict[feature] = 'y'
+
+
+		numpy_rep = self.to_numpy_rep(event_to_predict, feature_fields)
+		class_log_prob = np.dot(self.log_prob_suff_stats, numpy_rep)[:,0]
+		print class_log_prob
+		
 		class_log_prob += self.log_prob_priors
+		return np.argmax(class_log_prob)
 
 
 
@@ -222,3 +235,4 @@ class SplunkNaiveBayes(object):
 if __name__ == '__main__':
 	snb = SplunkNaiveBayes(host="localhost", port=8089, username="admin", password="flower00")
 	snb.train("/Users/ankitkumar/Documents/coding/205Consulting/OpenSource/SplunkML/naivebayes/splunk_votes.txt", ['handicapped_infants', 'water_project_cost_sharing', 'adoption_of_the_budget_resolution','physician_fee_freeze', 'el_salvador_aid', 'religious_groups_in_schools', 'anti_satellite_test_ban','aid_to_nicaraguan_contras','mx_missile','immigration','synfuels_corporation_cutback','education_spending','superfund_right_to_sue','crime','duty_free_exports'],'party')
+	print snb.predict(['handicapped_infants', 'water_project_cost_sharing', 'adoption_of_the_budget_resolution','physician_fee_freeze', 'el_salvador_aid', 'religious_groups_in_schools', 'anti_satellite_test_ban','aid_to_nicaraguan_contras','mx_missile','immigration','synfuels_corporation_cutback','education_spending','superfund_right_to_sue','crime','duty_free_exports'])
