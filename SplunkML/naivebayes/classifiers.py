@@ -36,6 +36,7 @@ class SplunkClassifierBase(object):
 		self.jobs = self.service.jobs
 		self.trained = False
 		self.feature_fields = None
+		self.accuracy_tested = False
 
 
 	def predict(self, feature_fields, class_field, event_to_predict):
@@ -101,15 +102,17 @@ class SplunkClassifierBase(object):
 				if predicted_class == result[class_field]:
 					correct += 1
 			offset += count
+		self.np_reps = np_reps
+		self.gold = gold
+
 
 		# 4: calculate percentage
 		perc_correct = float(correct)/result_count
-
-		# 5: check sklearn's implementation
-		sklearn_accuracy = self.compare_sklearn(np_reps, gold)
+		self.accuracy = perc_correct
+		self.accuracy_tested = True
 
 		# 5: return
-		return perc_correct, sklearn_accuracy
+		return perc_correct
 
 
 	def evaluate_accuracy(self, search_string, feature_fields, class_field):
@@ -126,14 +129,13 @@ class SplunkClassifierBase(object):
 		print "... done."
 
 		#2 : check accuracy
-		print "--> Iterating through test set and checking accuracy, then comparing with sklearn..."
-		accuracy, sklearn_accuracy = self.check_accuracy(search_string, feature_fields, class_field)
+		print "--> Iterating through test set and checking accuracy..."
+		accuracy = self.check_accuracy(search_string, feature_fields, class_field)
 		print "done."
 
-		#3 : return
-		print "Accuracy was %f. Sklearn's was %f." % (accuracy, sklearn_accuracy)
+		#3 : print result
+		print "Accuracy was %f." % accuracy
 
-		return accuracy
 
 
 
@@ -291,8 +293,13 @@ class SplunkNaiveBayes(SplunkClassifierBase):
 			notes: uses naive bayes assumption: P(c=x) is proportional P(x_i's|c)P(c). P(c) is the prior, P(x_i's|c) decomposes to 
 			P(x_1|c)P(x_2|c)...P(x_n|c); these are all calculated in log space using dot product.
 		'''
+		# 1: get numpy representation
 		numpy_rep = self.to_numpy_rep(event_to_predict, feature_fields)
+
+		# 2: find P(x_'s|c) using naive bayes assumption
 		class_log_prob = np.dot(self.log_prob_suff_stats, numpy_rep)[:,0]
+
+		# 3: multiply in (add in log space) priors
 		class_log_prob += self.log_prob_priors
 		if return_numpy_rep:
 			actual_class = self.mapping[event_to_predict[class_field]]
@@ -301,12 +308,21 @@ class SplunkNaiveBayes(SplunkClassifierBase):
 			return self.mapping[np.argmax(class_log_prob)]
 
 
-	def compare_sklearn(self, np_reps, gold):
-		X = np.array(np_reps)
+	def compare_sklearn(self):
+		'''
+			compares our implementation to sklearn's implementation. 
+
+			assumes that evaluate_accuracy has been called.
+		'''
+		if not self.accuracy_tested:
+			raise 'you must test the accuracy of the classifier before comparing to sklearn'
+		print "--> Checking sklearn's accuracy..."
+		X = np.array(self.np_reps)
 		nb = BernoulliNB(alpha=0)
-		y = np.array(gold)
+		y = np.array(self.gold)
 		nb.fit(X,y)
-		return nb.score(X,y)
+		print "...done."
+		print "sklearn accuracy is %f. Our accuracy was %f. " % (nb.score(X,y), self.accuracy)
 
 
 
@@ -317,6 +333,7 @@ if __name__ == '__main__':
 	password = raw_input("What is your password? ")
 	snb = SplunkNaiveBayes(host="localhost", port=8089, username=username, password=password)
 	snb.evaluate_accuracy(vote_search, vote_features, vote_class)
+	snb.compare_sklearn()
 
 
 
