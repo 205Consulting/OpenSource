@@ -1,27 +1,148 @@
 '''
-Splunk Naive Bayes class
+SplunkML classifiers
 
 Ankit Kumar
 ankitk@stanford.edu
 
 
-TODO: Change from P(feature_y=someval) to P(feature_v_somval=True)
+
 '''
 
 import splunklib.client as client
 import splunklib.results as results
+from sklearn.naive_bayes import BernoulliNB
 from collections import defaultdict
 import numpy as np
 import sys
 
+vote_features = ['handicapped_infants', 'water_project_cost_sharing', 'adoption_of_the_budget_resolution','physician_fee_freeze', 'el_salvador_aid', 'religious_groups_in_schools', 'anti_satellite_test_ban','aid_to_nicaraguan_contras','mx_missile','immigration','synfuels_corporation_cutback','education_spending','superfund_right_to_sue','crime','duty_free_exports']
+vote_search = 'source="/Users/ankitkumar/Documents/coding/205Consulting/OpenSource/SplunkML/naivebayes/splunk_votes_correct.txt"'
+vote_class = 'party'
+
 # use host="localhost",port=8089,username="admin",password="flower00"
 # use data_file = "/Users/ankitkumar/Documents/coding/205Consulting/OpenSource/SplunkML/naivebayes/splunk_votes.txt"
 
-class SplunkNaiveBayes(object):
+class SplunkClassifierBase(object):
+	''' SplunkClassifierBase
+
+	Base class of splunk classifiers. Functionality includes evaluate_accuracy(feature_fields, class_field)
+
+	'''
+
 
 	def __init__(self, host, port, username, password):
 		self.service = client.connect(host=host, port=port, username=username, password=password)
 		self.jobs = self.service.jobs
+		self.trained = False
+		self.feature_fields = None
+
+
+	def predict(self, feature_fields, class_field, event_to_predict):
+		'''
+			to overwrite
+		'''
+		pass
+
+
+	def train_classifier(self, search_string, feature_fields, class_field):
+		'''
+			to overwrite
+		'''
+		pass
+
+	def train(self, search_string, feature_fields, class_field):
+		self.train_classifier(search_string, feature_fields, class_field)
+		self.trained=True
+		
+
+	def compare_sklearn(self, np_reps, gold):
+		'''
+			to overwrite
+		'''
+		pass
+
+
+	def check_accuracy(self, search_string, feature_fields, class_field):
+		'''
+			check_accuracy(search_string, feature_fields, class_field)
+
+			search_string: string to use in the splunk search to narrow events
+			feature_fields: which fields to use to predict
+			class_field: field to predict
+
+			returns: accuracy of prediction
+
+			notes: assumes that classifier is already trained. calls predict on each event.
+		'''
+		# 1: check that classifier is trained:
+		if not self.trained:
+			raise 'classifier is not trained'
+
+		# 2: search for the events
+		search_string = 'search %s | eventstats values' % search_string
+		search_kwargs = {'timeout':1000, 'exec_mode':'blocking'}
+		job = self.jobs.create(search_string, **search_kwargs)
+		result_count = int(job["resultCount"])
+		
+		# 3: iterate through events, calling predict on each one. record results.
+		correct = 0
+		offset = 0
+		count = 50
+		np_reps = []
+		gold = []
+		while (offset < result_count):
+			kwargs_paginate = {'count': count, 'offset':offset}
+			search_results = job.results(**kwargs_paginate)
+			for result in results.ResultsReader(search_results):
+				predicted_class, np_rep, actual_class = self.predict(feature_fields, class_field,result, return_numpy_rep=True)
+				np_reps.append(np_rep)
+				gold.append(actual_class)
+				if predicted_class == result[class_field]:
+					correct += 1
+			offset += count
+
+		# 4: calculate percentage
+		perc_correct = float(correct)/result_count
+
+		# 5: check sklearn's implementation
+		sklearn_accuracy = self.compare_sklearn(np_reps, gold)
+
+		# 5: return
+		return perc_correct, sklearn_accuracy
+
+
+	def evaluate_accuracy(self, search_string, feature_fields, class_field):
+		'''
+			evaluate_accuracy()
+
+			trains the classifier, then predicts each of the events it trains on and records how many were correct
+		'''
+		print "Now evaluating %s test set accuracy." % self.__class__.__name__
+
+		#1 : train the classifier
+		print "--> Training the classifier..."
+		self.train(search_string, feature_fields, class_field)
+		print "... done."
+
+		#2 : check accuracy
+		print "--> Iterating through test set and checking accuracy, then comparing with sklearn..."
+		accuracy, sklearn_accuracy = self.check_accuracy(search_string, feature_fields, class_field)
+		print "done."
+
+		#3 : return
+		print "Accuracy was %f. Sklearn's was %f." % (accuracy, sklearn_accuracy)
+
+		return accuracy
+
+
+
+
+
+
+class SplunkNaiveBayes(SplunkClassifierBase):
+
+	def __init__(self, host, port, username, password):
+		super(SplunkNaiveBayes, self).__init__(host, port, username, password)
 		self.mapping = {}
 		self.sufficient_statistics = []
 		self.class_curr = 0
@@ -36,9 +157,9 @@ class SplunkNaiveBayes(object):
 
 
 
-	def sufficient_statistics_splunk_search(self, data_file, feature_fields, class_field):
+	def sufficient_statistics_splunk_search(self, search_string, feature_fields, class_field):
 		csl = self.make_csl(feature_fields + [class_field])
-		search_string = 'search source="%s" | table %s | untable %s field value |stats count by %s field value' % (data_file, csl, class_field, class_field)
+		search_string = 'search %s | table %s | untable %s field value |stats count by %s field value' % (search_string, csl, class_field, class_field)
 		search_kwargs = {'timeout':1000, 'exec_mode':'blocking'}
 		job = self.jobs.create(search_string, **search_kwargs)
 		return job
@@ -62,65 +183,6 @@ class SplunkNaiveBayes(object):
 
 
 
-
-	# def populate_sufficient_statistics(self, data_file, field, class_field):
-	# 	search_string = 'search source="%s" | stats count by %s, %s' % (data_file, field, class_field)
-	# 	search_kwargs = {'timeout':1000, 'exec_mode':'blocking'}
-	# 	job = self.jobs.create(search_string, **search_kwargs)
-
-	# 	result_count = job["resultCount"]
-	# 	offset = 0
-	# 	count = 50
-
-	# 	while (offset < int(result_count)):
-	# 		kwargs_paginate = {'count':count, 'offset':offset}
-	# 		search_results = job.results(**kwargs_paginate)
-	# 		for result in results.ResultsReader(search_results):
-	# 			class_val = result['%s' % class_field]
-	# 			num_hits = int(result['count'])
-	# 			field_val = result['%s' % field]
-	# 			self.priors[class_val] += num_hits
-	# 			self.sufficient_statistics[class_val][field][field_val] += num_hits
-	# 		offset += count
-
-
-
-
-
-	# def initialize_sufficient_statistics(self,data_file,feature_fields, class_field):
-	# 	search_string = 'search source="%s" | stats values(%s)' % (data_file, class_field)
-	# 	search_kwargs = {'timeout':1000, 'exec_mode':'blocking'}
-	# 	job = self.jobs.create(search_string, **search_kwargs)
-
-	# 	search_results = job.results()
-	# 	for result in results.ResultsReader(search_results):
-	# 		for class_val in result['values(party)']:
-	# 			self.sufficient_statistics[class_val] = {field:defaultdict(int) for field in feature_fields}
-	# 		# for feature_field in feature_fields:
-	# 		# 	self.sufficient_statistics[]
-	# 		# 	for val in result['values(%s)' % feature_field]:
-	# 		# 		self.sufficient_statistics[class_val][feature_field][val] = 0
-	# 	return
-
-
-
-
-	# 	# sufficient_statistics = {}
-	# 	# search_string = 'search source="%s" | stats dc' % data_file
-	# 	# print search_string
-	# 	# search_kwargs = {'timeout':1000, 'exec_mode':'blocking'}
-	# 	# job = self.jobs.create(search_string, **search_kwargs)
-
-		# search_results = job.results()
-		# for result in results.ResultsReader(search_results):
-		# 	num_classes = int(result['dc(%s)' % class_field])
-		# 	for field in feature_fields:
-		# 		sufficient_statistics[field] = np.zeros((num_classes,int(result['dc(%s)' % field])))
-				
-		# return sufficient_statistics
-
-
-
 	def make_csl(self, fields):
 		# Makes a comma-seperated list of the fields
 		string = ''
@@ -130,12 +192,12 @@ class SplunkNaiveBayes(object):
 		return string
 
 
-	def initialize_sufficient_statistics(self,data_file, feature_fields, class_field):
+	def initialize_sufficient_statistics(self,search_string, feature_fields, class_field):
 		'''
 			intializes sufficient statistics array by finding out size, and creates the mapping
 		'''
 		#1: search for all values of all fields in splunk
-		search_string = 'search source="%s" | stats values' % (data_file)
+		search_string = 'search %s | stats values' % (search_string)
 		search_kwargs = {'timeout':1000, 'exec_mode':'blocking'}
 		job = self.jobs.create(search_string, **search_kwargs)
 
@@ -143,6 +205,8 @@ class SplunkNaiveBayes(object):
 		for result in results.ResultsReader(search_results):
 			self.mapping = {result['values(%s)' % class_field][i]:i for i in range(len(result['values(%s)' % class_field]))}
 			self.num_classes = len(self.mapping)
+			for elem in self.mapping.items():
+				self.mapping[elem[1]] = elem[0]
 			curr_index = 0
 			for field in feature_fields:
 				for value in result['values(%s)' % field]:
@@ -168,26 +232,31 @@ class SplunkNaiveBayes(object):
 			note: will this always work? what about if soem event is "missing" a field, will this not work (i.e should I also do a splunk search to find priors once?)
 			perhaps close enough.
 		'''
+
 		priors = self.sufficient_statistics.sum(axis=1)
 		priors = priors / priors.sum()
 		self.log_prob_priors = np.log(priors)
 		
 
 
-	def train(self, data_file, feature_fields, class_field):
+	def train_classifier(self, search_string, feature_fields, class_field):
 		'''
-			trains the classifier
+			train_classifier(search_string, feature_fields, class_field)
 
-			sufficient statistics are as follows:
-			P(class_field=x) for each x
-			P(feature_fields[i]=j|class_field=x) for each i,j,x
+			search_string: string to search splunk with
+			feature_fields: fields to use as features
+			class_field: field to predict
+
+			returns: nothing, but sufficient statistics are populated
+
+			notes: sufficient statistics are priors (P(c=x)) for each class c, and P(x_i=true) for each x_i, where an x_i exists for each field-value pair in the feature fields
 		'''
 		#1: find out how big the sufficient statistic array needs to be, and create the string->index mapping
-		self.initialize_sufficient_statistics(data_file, feature_fields, class_field)
+		self.initialize_sufficient_statistics(search_string, feature_fields, class_field)
 		
 
 		#2: create the job that searches for sufficient statistics
-		suff_stat_search = self.sufficient_statistics_splunk_search(data_file, feature_fields, class_field)
+		suff_stat_search = self.sufficient_statistics_splunk_search(search_string, feature_fields, class_field)
 
 		#3: populate the sufficient statistics
 		self.populate_sufficient_statistics_from_search(suff_stat_search, class_field)
@@ -203,6 +272,8 @@ class SplunkNaiveBayes(object):
 
 		#2: add features that the event has; if we've never seen one before, ignore it
 		for field in feature_fields:
+			if field not in event_to_predict:
+				continue
 			val = event_to_predict[field]
 			if '%s_%s' % (field, val) in self.mapping:
 				np_rep[self.mapping['%s_%s' % (field,val)]] = 1
@@ -212,7 +283,7 @@ class SplunkNaiveBayes(object):
 
 
 
-	def predict(self, feature_fields, event_to_predict=None):
+	def predict(self, feature_fields, class_field, event_to_predict=None, return_numpy_rep=False):
 		if event_to_predict==None:
 			event_to_predict = {}
 			for feature in feature_fields:
@@ -221,18 +292,36 @@ class SplunkNaiveBayes(object):
 				else:
 					event_to_predict[feature] = 'y'
 
-
 		numpy_rep = self.to_numpy_rep(event_to_predict, feature_fields)
 		class_log_prob = np.dot(self.log_prob_suff_stats, numpy_rep)[:,0]
-		print class_log_prob
-		
 		class_log_prob += self.log_prob_priors
-		return np.argmax(class_log_prob)
+		if return_numpy_rep:
+			actual_class = self.mapping[event_to_predict[class_field]]
+			return self.mapping[np.argmax(class_log_prob)], numpy_rep.T[0], actual_class
+		else:
+			return self.mapping[np.argmax(class_log_prob)]
+
+
+	def compare_sklearn(self, np_reps, gold):
+		X = np.array(np_reps)
+		nb = BernoulliNB(alpha=0)
+		y = np.array(gold)
+		nb.fit(X,y)
+		return nb.score(X,y)
+
 
 
 
 
 if __name__ == '__main__':
-	snb = SplunkNaiveBayes(host="localhost", port=8089, username="admin", password="flower00")
-	snb.train("/Users/ankitkumar/Documents/coding/205Consulting/OpenSource/SplunkML/naivebayes/splunk_votes.txt", ['handicapped_infants', 'water_project_cost_sharing', 'adoption_of_the_budget_resolution','physician_fee_freeze', 'el_salvador_aid', 'religious_groups_in_schools', 'anti_satellite_test_ban','aid_to_nicaraguan_contras','mx_missile','immigration','synfuels_corporation_cutback','education_spending','superfund_right_to_sue','crime','duty_free_exports'],'party')
-	print snb.predict(['handicapped_infants', 'water_project_cost_sharing', 'adoption_of_the_budget_resolution','physician_fee_freeze', 'el_salvador_aid', 'religious_groups_in_schools', 'anti_satellite_test_ban','aid_to_nicaraguan_contras','mx_missile','immigration','synfuels_corporation_cutback','education_spending','superfund_right_to_sue','crime','duty_free_exports'])
+	username = raw_input("What is your username? ")
+	password = raw_input("What is your password? ")
+	snb = SplunkNaiveBayes(host="localhost", port=8089, username=username, password=password)
+	snb.evaluate_accuracy(vote_search, vote_features, vote_class)
+
+
+
+
+
+
+
