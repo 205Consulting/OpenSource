@@ -5,7 +5,8 @@ Ankit Kumar
 ankitk@stanford.edu
 
 
-
+Todo: 	(1) get better with numpy arrays...
+		(2) add laplace smoothing
 '''
 
 import splunklib.client as client
@@ -283,15 +284,13 @@ class SplunkNaiveBayes(SplunkClassifierBase):
 
 
 
-	def predict(self, feature_fields, class_field, event_to_predict=None, return_numpy_rep=False):
-		if event_to_predict==None:
-			event_to_predict = {}
-			for feature in feature_fields:
-				if np.random.random() > .5:
-					event_to_predict[feature] = 'n'
-				else:
-					event_to_predict[feature] = 'y'
+	def predict(self, feature_fields, class_field, event_to_predict, return_numpy_rep=False):
+		'''
+			predict(*)
 
+			notes: uses naive bayes assumption: P(c=x) is proportional P(x_i's|c)P(c). P(c) is the prior, P(x_i's|c) decomposes to 
+			P(x_1|c)P(x_2|c)...P(x_n|c); these are all calculated in log space using dot product.
+		'''
 		numpy_rep = self.to_numpy_rep(event_to_predict, feature_fields)
 		class_log_prob = np.dot(self.log_prob_suff_stats, numpy_rep)[:,0]
 		class_log_prob += self.log_prob_priors
