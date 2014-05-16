@@ -6,7 +6,7 @@ ankitk@stanford.edu
 
 
 Todo: 	(1) get better with numpy arrays...
-		(2) add laplace smoothing
+		(2) add laplace smoothing - it's not the same as sklearn right now!
 '''
 
 import splunklib.client as client
@@ -144,8 +144,9 @@ class SplunkClassifierBase(object):
 
 class SplunkNaiveBayes(SplunkClassifierBase):
 
-	def __init__(self, host, port, username, password):
+	def __init__(self, host, port, username, password, alpha=1.0):
 		super(SplunkNaiveBayes, self).__init__(host, port, username, password)
+		self.alpha = alpha
 		self.mapping = {}
 		self.sufficient_statistics = []
 		self.class_curr = 0
@@ -226,19 +227,18 @@ class SplunkNaiveBayes(SplunkClassifierBase):
 
 
 	def counts_to_logprobs(self):
-		#1: sufficient stat log probabilities
-		probabs = self.sufficient_statistics / self.sufficient_statistics.sum(axis=1)[:,np.newaxis]
-		self.log_prob_suff_stats = np.log(probabs)
-
-		#2: priors
-		'''
-			note: will this always work? what about if soem event is "missing" a field, will this not work (i.e should I also do a splunk search to find priors once?)
-			perhaps close enough.
-		'''
-
+		#1: compute priors before smoothing
 		priors = self.sufficient_statistics.sum(axis=1)
 		priors = priors / priors.sum()
 		self.log_prob_priors = np.log(priors)
+
+		#2: add smoothing
+		self.sufficient_statistics = self.sufficient_statistics + self.alpha
+
+		#3: turn sufficient stats into log probabilities
+		probabs = self.sufficient_statistics / self.sufficient_statistics.sum(axis=1)[:,np.newaxis]
+		self.log_prob_suff_stats = np.log(probabs)
+
 		
 
 
@@ -318,7 +318,7 @@ class SplunkNaiveBayes(SplunkClassifierBase):
 			raise 'you must test the accuracy of the classifier before comparing to sklearn'
 		print "--> Checking sklearn's accuracy..."
 		X = np.array(self.np_reps)
-		nb = BernoulliNB(alpha=0)
+		nb = BernoulliNB(alpha=1)
 		y = np.array(self.gold)
 		nb.fit(X,y)
 		print "...done."
