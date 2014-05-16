@@ -20,6 +20,11 @@ vote_features = ['handicapped_infants', 'water_project_cost_sharing', 'adoption_
 vote_search = 'source="/Users/ankitkumar/Documents/coding/205Consulting/OpenSource/SplunkML/naivebayes/splunk_votes_correct.txt"'
 vote_class = 'party'
 
+
+reaction_features = ['field%s' % i for i in range(1,11)]
+reaction_search = 'source="/Users/ankitkumar/Documents/coding/205Consulting/OpenSource/SplunkML/naivebayes/splunk_continuous_classification.txt"'
+reaction_class = 'success'
+
 # use host="localhost",port=8089,username="admin",password="flower00"
 # use data_file = "/Users/ankitkumar/Documents/coding/205Consulting/OpenSource/SplunkML/naivebayes/splunk_votes.txt"
 
@@ -144,7 +149,7 @@ class SplunkClassifierBase(object):
 
 class SplunkNaiveBayes(SplunkClassifierBase):
 
-	def __init__(self, host, port, username, password, alpha=1.0):
+	def __init__(self, host, port, username, password, alpha=0.0):
 		super(SplunkNaiveBayes, self).__init__(host, port, username, password)
 		self.alpha = alpha
 		self.mapping = {}
@@ -318,7 +323,7 @@ class SplunkNaiveBayes(SplunkClassifierBase):
 			raise 'you must test the accuracy of the classifier before comparing to sklearn'
 		print "--> Checking sklearn's accuracy..."
 		X = np.array(self.np_reps)
-		nb = BernoulliNB(alpha=1)
+		nb = BernoulliNB(alpha=0)
 		y = np.array(self.gold)
 		nb.fit(X,y)
 		print "...done."
@@ -328,13 +333,128 @@ class SplunkNaiveBayes(SplunkClassifierBase):
 
 
 
+#------------------------------------------------------------------------------------------------------------------------------------#
+
+class SplunkLogisticRegression(SplunkClassifierBase):
+	def __init__(self, host, port, username, password, training='batch', regularization=False):
+		super(SplunkLogisticRegression, self).__init__(host, port, username, password)
+		self.training = training
+
+
+
+
+	def initialization(self, feature_count):
+		#1: initialize size of features
+		self.feature_count = feature_count
+		#1: set theta to be 0s
+		self.theta = np.zeros(feature_count + 1) # +1 for the theta_0 term (see andrew ng's notes)
+
+
+
+	def make_batch_gradient_descent_search(self, search_string, feature_fields, class_field):
+		'''
+		'''
+		# 1: make the different strings to compute sigmoid
+		z_string = 'eval z=(-1)*'
+		eval_string = ''
+		stats_sum_string = 'stats sum(sum_*)'
+		for i in range(len(feature_fields)):
+			z_string += '(%s*%s)+' %(feature_fields[i],self.theta[i])
+			eval_string += 'eval sum_%s=result*%s | ' % (i, feature_fields[i])
+		z_string += '%s' % self.theta[-1]
+		eval_string += 'eval sum_end=result'
+		
+		# 2: turn into a splunk search
+		splunk_search = 'search %s | %s | eval sigmoiddenom = 1 + exp(z) | eval sigmoid = 1/sigmoiddenom | eval result = %s - sigmoid | %s | %s' % (search_string, z_string, class_field, eval_string, stats_sum_string)
+
+		# 3: return
+		print splunk_search
+		return splunk_search
+
+
+
+
+	def splunk_batch_gradient_descent(self, search_string, feature_fields, class_field, alpha=1.0, maxIter=1000, convergence=.001):
+		'''
+		'''
+		# current_diff = np.ones((1,self.feature_count+1))*100 #initialize
+		for iternum in range(maxIter):
+			print 'iter: %s' % iternum
+
+			#1: make the new splunk search
+			splunk_search = self.make_batch_gradient_descent_search(search_string, feature_fields, class_field)
+			search_kwargs = {'timeout':1000, 'exec_mode':'blocking'}
+			job = self.jobs.create(splunk_search, **search_kwargs)
+
+			search_results = job.results()
+			old_theta = np.copy(self.theta)
+			#2: iterate and update theta
+			for result in results.ResultsReader(search_results):
+				for i in range(self.feature_count):
+					# update theta_i
+					self.theta[i] += alpha*float(result['sum(sum_%s)' % i])
+				self.theta[-1] += alpha*float(result['sum(sum_end)'])
+
+			#3: check convergence
+			diff = np.linalg.norm(old_theta - self.theta)
+			print diff
+			print old_theta
+			print self.theta
+			if diff < convergence:
+				break
+			else:
+				print "difference: %f" % diff
+
+
+		
+
+		
+
+
+
+
+
+	def train_classifier_batch(self, search_string, feature_fields, class_field):
+		'''
+		'''
+		#1: initalize theta parameter
+		self.initialization(len(feature_fields))
+
+		#2: train theta using batch gradient descent
+		self.splunk_batch_gradient_descent(search_string, feature_fields, class_field)
+
+
+	def train_classifier(self, search_string, feature_fields, class_field):
+		'''
+			train_classifier
+
+			trains the classifier given the feature fields and class field
+
+			feature_fields: list of strings corresponding to features
+			class_field: string corresponding to class field
+		'''
+		if self.training=='batch':
+			self.train_classifier_batch(search_string, feature_fields, class_field)
+		else:
+			pass
+
+
+
+
+
+
+
+
 if __name__ == '__main__':
 	username = raw_input("What is your username? ")
 	password = raw_input("What is your password? ")
-	snb = SplunkNaiveBayes(host="localhost", port=8089, username=username, password=password)
-	snb.evaluate_accuracy(vote_search, vote_features, vote_class)
-	snb.compare_sklearn()
+	# snb = SplunkNaiveBayes(host="localhost", port=8089, username=username, password=password)
+	# snb.evaluate_accuracy(vote_search, vote_features, vote_class)
+	# # snb.compare_sklearn()
 
+
+	logit = SplunkLogisticRegression(host="localhost", port=8089, username=username, password=password)
+	logit.evaluate_accuracy(reaction_search, reaction_features, reaction_class)
 
 
 
