@@ -365,7 +365,7 @@ class SplunkLogisticRegression(SplunkClassifierBase):
 		eval_string += 'eval sum_end=result'
 		
 		# 2: turn into a splunk search
-		splunk_search = 'search %s | %s | eval sigmoiddenom = 1 + exp(z) | eval sigmoid = 1/sigmoiddenom | eval result = %s - sigmoid | %s | %s' % (search_string, z_string, class_field, eval_string, stats_sum_string)
+		splunk_search = 'search %s | %s | eval sigmoiddenom = 1 + exp(z) | eval sigmoid = if(sigmoiddenom=="inf",0,1/sigmoiddenom) | eval result = %s - sigmoid | %s | %s' % (search_string, z_string, class_field, eval_string, stats_sum_string)
 
 		# 3: return
 		print splunk_search
@@ -374,7 +374,7 @@ class SplunkLogisticRegression(SplunkClassifierBase):
 
 
 
-	def splunk_batch_gradient_descent(self, search_string, feature_fields, class_field, alpha=1.0, maxIter=1000, convergence=.001):
+	def splunk_batch_gradient_descent(self, search_string, feature_fields, class_field, alpha=5.0, maxIter=1000, convergence=.001):
 		'''
 		'''
 		# current_diff = np.ones((1,self.feature_count+1))*100 #initialize
